@@ -1,6 +1,6 @@
 // Token Radar entry (Node 22, standard library only). Variants live in lib/model.ts;
 // --variant a is the house starter's model (the control), b the comps-curve entry,
-// c its momentum-tilted challenger. Default: b.
+// c its momentum-tilted challenger, d the comps curve plus chain breadth (the entry).
 //
 // The program reads the sealed snapshot from /input/snapshot.json (or --input <file|dir>), scores
 // every pre-token protocol, writes the ranked board to /output/board.json, and copies this
@@ -46,7 +46,7 @@ const snapshot = parseSnapshot(readFileSync(inputFile, 'utf8'));
 const variantId = arg('variant', 'b') as VariantId;
 const variant = VARIANTS[variantId];
 if (variant === undefined) {
-  process.stderr.write(`token radar: unknown --variant ${variantId}: use a, b or c\n`);
+  process.stderr.write(`token radar: unknown --variant ${variantId}: use a, b, c or d\n`);
   process.exit(2);
 }
 const { board, radar, curve } = buildRadar(snapshot, variant);

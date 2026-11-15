@@ -30,6 +30,8 @@
 //   c  comps curve with a momentum tilt: growth weight 1.0, growth clamp widened to +300%
 //      (the snapshot's fastest growers run past +160% in a week), steeper maturity, and a
 //      small chain-breadth multiplier (the challenger)
+//   d  comps curve plus chain breadth: the size curve gains log10(chain count) as a second
+//      regressor (coefficient about -0.20), same growth/maturity/farm economics as b (the entry)
 
 export interface SnapshotProtocol {
   slug: string;
@@ -52,7 +54,7 @@ export interface Snapshot {
   watchlist: string[];
 }
 
-export type VariantId = 'a' | 'b' | 'c';
+export type VariantId = 'a' | 'b' | 'c' | 'd';
 
 export interface Variant {
   id: VariantId;
@@ -69,18 +71,22 @@ export interface Variant {
   chain_bonus: number; // variant C only: per extra chain, capped at 5
   farm_steps: number; // 6 or 8
   use_curve: boolean;
+  curve_features: 'tvl' | 'tvl-chains'; // size-curve regressors: log TVL alone, or log TVL + log chain count
 }
 
 export const VARIANTS: Record<VariantId, Variant> = {
-  a: { id: 'a', label: 'starter flat multiple', model_version: 'radar-1', base_multiple: 0.25, growth_weight: 0.5, growth_floor: -60, growth_cap: 120, maturity_floor: 0.6, maturity_range: 0.4, maturity_days: 1095, unknown_age_days: 365, chain_bonus: 0, farm_steps: 6, use_curve: false },
-  b: { id: 'b', label: 'comps curve, netted farm plans', model_version: 'radar-2', base_multiple: 0, growth_weight: 0.5, growth_floor: -60, growth_cap: 120, maturity_floor: 0.6, maturity_range: 0.4, maturity_days: 1095, unknown_age_days: 365, chain_bonus: 0, farm_steps: 8, use_curve: true },
-  c: { id: 'c', label: 'comps curve, momentum tilt', model_version: 'radar-2m', base_multiple: 0, growth_weight: 1.0, growth_floor: -40, growth_cap: 300, maturity_floor: 0.5, maturity_range: 0.5, maturity_days: 1095, unknown_age_days: 365, chain_bonus: 0.02, farm_steps: 8, use_curve: true },
+  a: { id: 'a', label: 'starter flat multiple', model_version: 'radar-1', base_multiple: 0.25, growth_weight: 0.5, growth_floor: -60, growth_cap: 120, maturity_floor: 0.6, maturity_range: 0.4, maturity_days: 1095, unknown_age_days: 365, chain_bonus: 0, farm_steps: 6, use_curve: false, curve_features: 'tvl' },
+  b: { id: 'b', label: 'comps curve, netted farm plans', model_version: 'radar-2', base_multiple: 0, growth_weight: 0.5, growth_floor: -60, growth_cap: 120, maturity_floor: 0.6, maturity_range: 0.4, maturity_days: 1095, unknown_age_days: 365, chain_bonus: 0, farm_steps: 8, use_curve: true, curve_features: 'tvl' },
+  c: { id: 'c', label: 'comps curve, momentum tilt', model_version: 'radar-2m', base_multiple: 0, growth_weight: 1.0, growth_floor: -40, growth_cap: 300, maturity_floor: 0.5, maturity_range: 0.5, maturity_days: 1095, unknown_age_days: 365, chain_bonus: 0.02, farm_steps: 8, use_curve: true, curve_features: 'tvl' },
+  d: { id: 'd', label: 'comps curve + chain breadth, netted farm plans', model_version: 'radar-3', base_multiple: 0, growth_weight: 0.5, growth_floor: -60, growth_cap: 120, maturity_floor: 0.6, maturity_range: 0.4, maturity_days: 1095, unknown_age_days: 365, chain_bonus: 0, farm_steps: 8, use_curve: true, curve_features: 'tvl-chains' },
 };
 
 export interface CurveFit {
   n: number;
   intercept: number;
   slope: number;
+  chain_coef: number | null; // log10(chains) coefficient; null when the curve is TVL-only
+  features: string; // 'logTVL' or 'logTVL+logChains'
   loo_factor: number;
   loo_within2x: number;
   split_factor: number;
@@ -248,19 +254,49 @@ export function comparables(snapshot: Snapshot): SnapshotProtocol[] {
 
 const log10 = (n: number): number => Math.log10(n);
 
-/** Least squares for log10(mcap) = a + b * log10(tvl) over a set of comparables. */
-function ols(ps: SnapshotProtocol[]): { a: number; b: number } {
-  const n = ps.length;
-  const mx = ps.reduce((t, p) => t + log10(p.tvl_usd), 0) / n;
-  const my = ps.reduce((t, p) => t + log10(p.mcap_usd!), 0) / n;
-  let sxy = 0;
-  let sxx = 0;
-  for (const p of ps) {
-    sxy += (log10(p.tvl_usd) - mx) * (log10(p.mcap_usd!) - my);
-    sxx += (log10(p.tvl_usd) - mx) ** 2;
+/** Least squares for log10(mcap) on a feature vector, by Gaussian elimination on the normal
+ *  equations (a hair of ridge on the non-intercept diagonal keeps a degenerate column from
+ *  dividing by zero). Returns one coefficient per feature, intercept first. */
+function olsMulti(xs: number[][], ys: number[]): number[] {
+  const n = xs.length;
+  const k = xs[0]!.length;
+  const a: number[][] = [];
+  for (let i = 0; i < k; i++) {
+    const row: number[] = [];
+    for (let j = 0; j < k; j++) {
+      let s = 0;
+      for (let t = 0; t < n; t++) s += xs[t]![i]! * xs[t]![j]!;
+      if (i === j && i > 0) s += 1e-9;
+      row.push(s);
+    }
+    let b = 0;
+    for (let t = 0; t < n; t++) b += xs[t]![i]! * ys[t]!;
+    row.push(b);
+    a.push(row);
   }
-  const b = sxy / sxx;
-  return { a: my - b * mx, b };
+  for (let c = 0; c < k; c++) {
+    let piv = c;
+    for (let r = c + 1; r < k; r++) if (Math.abs(a[r]![c]!) > Math.abs(a[piv]![c]!)) piv = r;
+    const tmp = a[c]!;
+    a[c] = a[piv]!;
+    a[piv] = tmp;
+    const d = a[c]![c]!;
+    if (d === 0) continue;
+    for (let r = 0; r < k; r++) {
+      if (r === c) continue;
+      const f = a[r]![c]! / d;
+      for (let cc = c; cc <= k; cc++) a[r]![cc]! -= f * a[c]![cc]!;
+    }
+  }
+  return a.map((row, i) => (row[i] === 0 ? 0 : row[k]! / row[i]!));
+}
+
+/** One comparable's feature vector under a curve spec: always [1, log10(tvl)], plus
+ *  log10(chain count) when the spec asks for chain breadth. */
+function curveFeatures(p: SnapshotProtocol, features: 'tvl' | 'tvl-chains'): number[] {
+  const v = [1, log10(p.tvl_usd)];
+  if (features === 'tvl-chains') v.push(log10(Math.max(1, p.chains.length)));
+  return v;
 }
 
 /** Median absolute log error as a factor, and the share of predictions within 2x. */
@@ -273,15 +309,26 @@ function factorStats(errors: number[]): { factor: number; within2x: number } {
   };
 }
 
-/** Fit the size curve on the snapshot's comparables and backtest it two ways, in the open. */
-export function fitCurve(snapshot: Snapshot): CurveFit {
+/** Fit the size curve on the snapshot's comparables and backtest it two ways, in the open.
+ *  The regressors come from the variant: TVL alone, or TVL plus chain count (variant D).
+ *  Chain breadth earned its place by the forward test, not by fitting: on this snapshot it
+ *  improves leave-one-out (x3.648 to x3.465) and 5-fold CV (x3.974 to x3.562) with the
+ *  time-split unchanged (x2.140), while age, 7-day change and category dummies all fail the
+ *  time-split. The fitted chain coefficient is about -0.20: each doubling of the chain count
+ *  multiplies the predicted market cap by about 0.87x — spreading thin across chains is
+ *  worth slightly less per dollar of TVL. */
+export function fitCurve(snapshot: Snapshot, variant: Variant): CurveFit {
   const comps = comparables(snapshot);
-  const { a, b } = ols(comps);
+  const feats = variant.curve_features;
+  const xs = comps.map((p) => curveFeatures(p, feats));
+  const ys = comps.map((p) => log10(p.mcap_usd!));
+  const predict = (beta: number[], x: number[]): number => beta.reduce((t, b, i) => t + b * x[i]!, 0);
+  const beta = olsMulti(xs, ys);
   // Leave-one-out: refit without each comparable, predict it.
-  const looErrors = comps.map((held) => {
-    const rest = comps.filter((p) => p !== held);
-    const f = ols(rest);
-    return Math.abs(f.a + f.b * log10(held.tvl_usd) - log10(held.mcap_usd!));
+  const looErrors = comps.map((held, i) => {
+    const restX = xs.filter((_, j) => j !== i);
+    const restY = ys.filter((_, j) => j !== i);
+    return Math.abs(predict(olsMulti(restX, restY), xs[i]!) - ys[i]!);
   });
   const loo = factorStats(looErrors);
   // Time split: fit on protocols listed before 2024, test on those listed after.
@@ -289,13 +336,15 @@ export function fitCurve(snapshot: Snapshot): CurveFit {
   const test = comps.filter((p) => p.listed_at !== null && p.listed_at >= '2024-01-01');
   let split = { factor: 0, within2x: 0 };
   if (train.length >= 10 && test.length >= 10) {
-    const f = ols(train);
-    split = factorStats(test.map((p) => Math.abs(f.a + f.b * log10(p.tvl_usd) - log10(p.mcap_usd!))));
+    const f = olsMulti(train.map((p) => curveFeatures(p, feats)), train.map((p) => log10(p.mcap_usd!)));
+    split = factorStats(test.map((p) => Math.abs(predict(f, curveFeatures(p, feats)) - log10(p.mcap_usd!))));
   }
   return {
     n: comps.length,
-    intercept: round4(a),
-    slope: round4(b),
+    intercept: round4(beta[0]!),
+    slope: round4(beta[1]!),
+    chain_coef: feats === 'tvl-chains' ? round4(beta[2]!) : null,
+    features: feats === 'tvl-chains' ? 'logTVL+logChains' : 'logTVL',
     loo_factor: loo.factor,
     loo_within2x: loo.within2x,
     split_factor: split.factor,
@@ -323,7 +372,8 @@ export function impliedValue(
   const chainMult = 1 + variant.chain_bonus * Math.min(Math.max(protocol.chains.length - 1, 0), 5);
   let curveUsd: number;
   if (variant.use_curve && curve !== null) {
-    curveUsd = Math.max(1, Math.round(10 ** (curve.intercept + curve.slope * log10(protocol.tvl_usd))));
+    const chainTerm = curve.chain_coef !== null ? curve.chain_coef * log10(Math.max(1, protocol.chains.length)) : 0;
+    curveUsd = Math.max(1, Math.round(10 ** (curve.intercept + curve.slope * log10(protocol.tvl_usd) + chainTerm)));
   } else {
     curveUsd = Math.max(1, Math.round(protocol.tvl_usd * variant.base_multiple));
   }
@@ -610,7 +660,7 @@ export function radarRow(row: BoardRow): RadarRow {
 
 /** Everything the dashboard renders, from the snapshot. */
 export function buildRadar(snapshot: Snapshot, variant: Variant): { board: BoardRow[]; radar: RadarData; curve: CurveFit | null } {
-  const curve = variant.use_curve ? fitCurve(snapshot) : null;
+  const curve = variant.use_curve ? fitCurve(snapshot, variant) : null;
   const board = buildBoard(snapshot, variant, curve);
   const live = liveRows(snapshot);
   const early = board.filter((r) => !snapshot.watchlist.includes(r.slug)).length;

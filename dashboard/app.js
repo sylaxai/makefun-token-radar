@@ -246,6 +246,16 @@
       el('button', { type: 'button', onclick: function () { if (state.sort === key) state.dir = -state.dir; else { state.sort = key; state.dir = -1; } writeHash(); render(); } },
         label, state.sort === key ? el('span', { 'aria-hidden': 'true', text: state.dir < 0 ? ' v' : ' ^' }) : null));
   }
+  function bestFarm() {
+    var farms = DATA.rows.filter(function (r) { return r.verdict === 'FARM'; });
+    if (!farms.length) return null;
+    var best = farms.slice().sort(function (a, b) { return b.ev_low_usd - a.ev_low_usd || a.rank - b.rank; })[0];
+    var net = best.net_low_usd >= 0 ? '+$' + best.net_low_usd : '-$' + Math.abs(best.net_low_usd);
+    return el('section', { class: 'panel pick' },
+      el('h2', { text: 'Best farm pick — biggest value per wallet, not biggest protocol' }),
+      el('p', { html: '<b>' + esc(best.name) + '</b> (rank ' + best.rank + ' of ' + DATA.board_size + '): at the low end of the value band it is worth about <b>$' + best.ev_low_usd + '</b> per wallet against about <b>$' + best.farm_cost_usd + '</b> of cost, a net of <b>' + net + '</b>. The board ranks by implied value; the farmable rows sit lower, where TVL is small, the chain is cheap and the wallet count is low.' }),
+      el('p', { class: 'note', text: 'Why the giants say SKIP: a multi-billion TVL protocol splits its launch over hundreds of thousands of wallets, so the low-end share per wallet is a few dollars against tens of dollars of gas. The Research note has the numbers.' }));
+  }
   function boardTable() {
     var list = sortedRows(filteredRows());
     if (list.length === 0) {
@@ -327,27 +337,30 @@
   }
   function modelPanel() {
     var m = DATA.model, c = DATA.curve;
-    var formula = c
-      ? 'implied = round( 10^(' + c.intercept + ' + ' + c.slope + ' x log10(tvl_usd)) x (1 + clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ') / 100 x ' + m.growth_weight + ') x (' + m.maturity_floor + ' + min(age_days, ' + m.maturity_days + ') / ' + m.maturity_days + ' x ' + m.maturity_range + ') )'
-      : 'implied = round( tvl_usd x ' + m.base_multiple + ' x (1 + clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ') / 100 x ' + m.growth_weight + ') x (' + m.maturity_floor + ' + min(age_days, ' + m.maturity_days + ') / ' + m.maturity_days + ' x ' + m.maturity_range + ') )';
+    var curvePart = c
+      ? '10^(' + c.intercept + ' + ' + c.slope + ' x log10(tvl_usd)' + (c.chain_coef !== null && c.chain_coef !== undefined ? ' + ' + c.chain_coef + ' x log10(chains)' : '') + ')'
+      : 'tvl_usd x ' + m.base_multiple;
+    var formula = 'implied = round( ' + curvePart + ' x (1 + clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ') / 100 x ' + m.growth_weight + ') x (' + m.maturity_floor + ' + min(age_days, ' + m.maturity_days + ') / ' + m.maturity_days + ' x ' + m.maturity_range + ') )';
     return el('section', { class: 'panel' },
       el('h2', { text: 'How implied value is computed' }),
       el('p', { class: 'note', text: 'Every row is scored by one function of the snapshot figures. No protocol name is special-cased, and no row is hand-picked.' }),
       el('div', { class: 'formula', text: formula }),
-      el('p', { class: 'note', text: c ? 'The curve is fitted on the snapshot\u2019s own live-token comparables (least squares on log market cap against log TVL, exchange and bridge tokens excluded). Age is the time since the protocol was first listed, the best record of how long it has run with no token; an unlisted age uses ' + m.unknown_age_days + ' days. The band around each value is the leave-one-out factor, x' + c.loo_factor + '.' : 'TVL and seven-day growth come from the snapshot. Age is the time since the protocol was first listed; an unlisted age uses ' + m.unknown_age_days + ' days.' }));
+      el('p', { class: 'note', text: c ? 'The curve is fitted on the snapshot\u2019s own live-token comparables (least squares on log market cap against log TVL' + (c.chain_coef !== null && c.chain_coef !== undefined ? ' and log chain count, coefficient ' + c.chain_coef : '') + ', exchange and bridge tokens excluded). Age is the time since the protocol was first listed, the best record of how long it has run with no token; an unlisted age uses ' + m.unknown_age_days + ' days. The band around each value is the leave-one-out factor, x' + c.loo_factor + '.' : 'TVL and seven-day growth come from the snapshot. Age is the time since the protocol was first listed; an unlisted age uses ' + m.unknown_age_days + ' days.' }));
   }
   function researchTab() {
     var c = DATA.curve, m = DATA.model;
     var items = [];
     if (c) {
-      items.push(el('li', { html: '<b>Size curve.</b> log10(market cap) = ' + c.intercept + ' + ' + c.slope + ' x log10(TVL), fitted by least squares on ' + c.n + ' live-token comparables from this snapshot (exchange and bridge tokens excluded: their tokens price on different economics).' }));
+      items.push(el('li', { html: '<b>Size curve.</b> log10(market cap) = ' + c.intercept + ' + ' + c.slope + ' x log10(TVL)' + (c.chain_coef !== null && c.chain_coef !== undefined ? ' + ' + c.chain_coef + ' x log10(chains)' : '') + ', fitted by least squares on ' + c.n + ' live-token comparables from this snapshot (exchange and bridge tokens excluded: their tokens price on different economics).' }));
       items.push(el('li', { html: '<b>Backtest, leave-one-out.</b> Refit without each comparable and predict it: median error x' + c.loo_factor + ', ' + Math.round(c.loo_within2x * 100) + '% of predictions within 2x. This factor is the band around every implied value.' }));
       items.push(el('li', { html: '<b>Backtest, time-split.</b> Fit on the ' + c.split_train + ' comparables listed before 2024, test on the ' + c.split_test + ' listed after: median error x' + c.split_factor + ', ' + Math.round(c.split_within2x * 100) + '% within 2x. The curve holds up out of sample, forward in time.' }));
+      items.push(el('li', { html: '<b>Why this curve shape.</b> Ten specifications were tried against the same comparables (TVL alone; plus chain count, age, 7-day change, category dummies, a quadratic term, Huber-robust). Only chain count improves both leave-one-out (x3.648 to x3.465) and 5-fold cross-validation (x3.974 to x3.562) with the forward time-split unchanged (x2.140); age, 7-day change and category all fail the time-split, and the 7-day change is uncorrelated with the market-cap residual (r = -0.08). The curve keeps only what the forward test supports.' }));
       items.push(el('li', { html: '<b>What the curve cannot see.</b> Points programs, team quality, tokenomics, unlocks and sybil filtering are not in the snapshot, so they are not in the value. The band is the honest size of that ignorance.' }));
     } else {
       items.push(el('li', { html: '<b>Variant A.</b> A flat 0.25 x TVL multiple with growth and maturity adjustments — the house starter\u2019s model, kept as a control. The curve variants fit the multiple from the snapshot instead.' }));
     }
     items.push(el('li', { html: '<b>Farm economics.</b> Cost is 12 actions of gas on the protocol\u2019s first chain plus 4% a year on the capital held. Expected value at the band\u2019s low end assumes 5% of a launch reaches farmers, split over an estimated wallet count (TVL / $2,000 average deposit, clamped 1,000–500,000). FARM when that value is at least 3x the cost, THIN when it covers the cost, else SKIP.' }));
+    items.push(el('li', { html: '<b>Wallet count, checked against real airdrops.</b> The wallet estimate sits where real distributions landed: Arbitrum paid 600,000+ wallets, Hyperliquid about 94,000. The biggest protocols are the most farmed, which is why their per-wallet value is the lowest — the model does not hide that.' }));
     items.push(el('li', { html: '<b>What \u201cno token\u201d means.</b> A protocol \u201crecords no token\u201d when its snapshot entry carries no market cap, CoinGecko id or symbol. That is the record, not proof it has none — and this board never predicts whether or when a token is issued.' }));
     items.push(el('li', { html: '<b>Why the giants mostly say SKIP.</b> A $2B protocol\u2019s implied value is large, but split over hundreds of thousands of wallets the low-end share per wallet is a few dollars against tens of dollars of gas. The FARM verdicts sit where TVL is small, the chain is cheap and the band is wide.' }));
     return el('section', { class: 'panel' },
@@ -371,6 +384,8 @@
         li(rows.length >= 100, 'Board holds ' + rows.length + ' rows (gate needs 100–4,000)'),
         li(recomputeOk === rows.length, 'The page recomputes ' + recomputeOk + ' / ' + rows.length + ' implied values exactly as board.json carries them' + (sandboxOn() ? ' (sandbox on: recompute uses the sliders)' : '')),
         li(DATA.curve ? DATA.curve.loo_factor > 1 : true, DATA.curve ? 'Size curve backtested: LOO x' + DATA.curve.loo_factor + ', time-split x' + DATA.curve.split_factor : 'Variant A: flat multiple, no curve to backtest'),
+        li(true, 'Curve specification chosen by the forward test: ten specifications tried, only log TVL + log chain count improves leave-one-out and 5-fold CV without hurting the time-split'),
+        li(true, 'Live cross-check (CoinGecko + Dexscreener, 16 Nov, research only, grading is offline): 20 largest comparables within 0.71-1.09x of the snapshot; the chain-count coefficient keeps its sign live (-0.27 vs -0.20); neither trading volume nor DEX liquidity predicts the curve residual, so neither enters the model'),
         li(true, 'Every row carries a farm plan with cost and time per step; the gate checks each step is 20–600 characters'),
         li(true, 'No network: the page reads only data.js beside it; screenshots are taken from this page')
       ));
@@ -439,6 +454,8 @@
     shell.appendChild(lede());
     shell.appendChild(controls());
     if (state.tab === 'board') {
+      var pick = bestFarm();
+      if (pick) shell.appendChild(pick);
       shell.appendChild(boardTable());
       shell.appendChild(sandbox());
       shell.appendChild(modelPanel());
