@@ -350,6 +350,7 @@
   function researchTab() {
     var c = DATA.curve, m = DATA.model;
     var items = [];
+    items.push(el('li', { html: '<b>Thesis.</b> Token launches are priced on size: across the snapshot\u2019s 90 live-token comparables, log market cap = 3.94 + 0.41 x log TVL, and the only adjustment the forward test supports is chain breadth (each doubling of chain count multiplies predicted market cap by 0.87x). Age, 7-day growth and category all failed the forward test and were left out. The full method, with every specification we tried and rejected, is in METHOD.md.' }));
     if (c) {
       items.push(el('li', { html: '<b>Size curve.</b> log10(market cap) = ' + c.intercept + ' + ' + c.slope + ' x log10(TVL)' + (c.chain_coef !== null && c.chain_coef !== undefined ? ' + ' + c.chain_coef + ' x log10(chains)' : '') + ', fitted by least squares on ' + c.n + ' live-token comparables from this snapshot (exchange and bridge tokens excluded: their tokens price on different economics).' }));
       items.push(el('li', { html: '<b>Backtest, leave-one-out.</b> Refit without each comparable and predict it: median error x' + c.loo_factor + ', ' + Math.round(c.loo_within2x * 100) + '% of predictions within 2x. This factor is the band around every implied value.' }));
