@@ -253,7 +253,7 @@
     var net = best.net_low_usd >= 0 ? '+$' + best.net_low_usd : '-$' + Math.abs(best.net_low_usd);
     return el('section', { class: 'panel pick' },
       el('h2', { text: 'Best farm pick — biggest value per wallet, not biggest protocol' }),
-      el('p', { html: '<b>' + esc(best.name) + '</b> (rank ' + best.rank + ' of ' + DATA.board_size + '): at the low end of the value band it is worth about <b>$' + best.ev_low_usd + '</b> per wallet against about <b>$' + best.farm_cost_usd + '</b> of cost, a net of <b>' + net + '</b>. The board ranks by implied value; the farmable rows sit lower, where TVL is small, the chain is cheap and the wallet count is low.' }),
+      el('p', { html: '<b>' + esc(best.name) + '</b> <span class="chip FARM">FARM</span> (rank ' + best.rank + ' of ' + DATA.board_size + '): at the low end of the value band it is worth about <b>$' + best.ev_low_usd + '</b> per wallet against about <b>$' + best.farm_cost_usd + '</b> of cost, a net of <b>' + net + '</b>. The board ranks by implied value; the farmable rows sit lower, where TVL is small, the chain is cheap and the wallet count is low.' }),
       el('p', { class: 'note', text: 'Why the giants say SKIP: a multi-billion TVL protocol splits its launch over hundreds of thousands of wallets, so the low-end share per wallet is a few dollars against tens of dollars of gas. The Research note has the numbers.' }));
   }
   function boardTable() {
