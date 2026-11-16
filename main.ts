@@ -11,7 +11,7 @@
 // and dashboard/app.js read /output/data.js, which this program writes from the same board.
 //
 // Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
-//   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts --input ../input/snapshot.json --variant b
+//   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts --input ../input/snapshot.json --variant d
 
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -43,7 +43,7 @@ if (!existsSync(inputFile)) {
 const out = arg('output', process.env.MAKEFUN_OUTPUT_DIR ?? '/output');
 
 const snapshot = parseSnapshot(readFileSync(inputFile, 'utf8'));
-const variantId = arg('variant', 'b') as VariantId;
+const variantId = arg('variant', 'd') as VariantId;
 const variant = VARIANTS[variantId];
 if (variant === undefined) {
   process.stderr.write(`token radar: unknown --variant ${variantId}: use a, b, c or d\n`);
